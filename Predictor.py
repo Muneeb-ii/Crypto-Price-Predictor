@@ -1,5 +1,6 @@
 import pandas as pd
 import glob, os
+from sklearn.ensemble import RandomForestRegressor
 
 # point to your folder
 csv_files = glob.glob('Historical_Data/coin_*.csv')
@@ -41,3 +42,10 @@ test  = coin_df[coin_df['Date'] >= split_date]
 
 X_train, y_train = train[features], train['Close']
 X_test,  y_test  = test[features],  test['Close']
+
+model = RandomForestRegressor(
+    n_estimators=100,
+    random_state=42,
+    n_jobs=-1
+)
+model.fit(X_train, y_train)
