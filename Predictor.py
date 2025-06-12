@@ -3,6 +3,8 @@ import os
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.feature_selection import RFE
+from sklearn.linear_model import LassoCV
 import numpy as np
 import matplotlib.pyplot as plt
 from pycoingecko import CoinGeckoAPI
@@ -155,6 +157,33 @@ for coin, coin_id in coin_mapping.items():
     df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']  # Normalized width
     df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])  # Position within bands
     
+    # Add Ichimoku Cloud
+    # Tenkan-sen (Conversion Line): (highest high + lowest low) / 2 for the past 9 periods
+    high_9 = df['High'].rolling(window=9, min_periods=1).max()
+    low_9 = df['Low'].rolling(window=9, min_periods=1).min()
+    df['Tenkan_sen'] = (high_9 + low_9) / 2
+    
+    # Kijun-sen (Base Line): (highest high + lowest low) / 2 for the past 26 periods
+    high_26 = df['High'].rolling(window=26, min_periods=1).max()
+    low_26 = df['Low'].rolling(window=26, min_periods=1).min()
+    df['Kijun_sen'] = (high_26 + low_26) / 2
+    
+    # Senkou Span A (Leading Span A): (Tenkan-sen + Kijun-sen) / 2
+    df['Senkou_span_a'] = ((df['Tenkan_sen'] + df['Kijun_sen']) / 2).shift(26)
+    
+    # Senkou Span B (Leading Span B): (highest high + lowest low) / 2 for the past 52 periods
+    high_52 = df['High'].rolling(window=52, min_periods=1).max()
+    low_52 = df['Low'].rolling(window=52, min_periods=1).min()
+    df['Senkou_span_b'] = ((high_52 + low_52) / 2).shift(26)
+    
+    # Chikou Span (Lagging Span): Current closing price, plotted 26 periods behind
+    df['Chikou_span'] = df['Close'].shift(-26)
+    
+    # Additional Ichimoku-derived features
+    df['Cloud_Color'] = np.where(df['Senkou_span_a'] > df['Senkou_span_b'], 1, -1)  # 1 for bullish, -1 for bearish
+    df['Price_vs_Cloud'] = np.where(df['Close'] > df['Senkou_span_a'], 1, -1)  # 1 if price above cloud, -1 if below
+    df['TK_Cross'] = np.where(df['Tenkan_sen'] > df['Kijun_sen'], 1, -1)  # 1 for bullish cross, -1 for bearish cross
+    
     # Print NaN counts for each feature
     print("\nNaN counts before dropna:")
     print(df.isna().sum())
@@ -168,7 +197,7 @@ for coin, coin_id in coin_mapping.items():
         continue
     
     # Define features and target
-    features = [
+    all_features = [
         'Prev_Close', 'Open', 'High', 'Low', 'Volume', 
         'MA5', 'MA10', 'Price_Change', 'Price_Change_5d',
         'Volatility', 'High_Low_Range', 'Price_Range_5d',
@@ -195,29 +224,57 @@ for coin, coin_id in coin_mapping.items():
     target_scaler = MinMaxScaler()
     
     # Scale features and target
-    X_train = feature_scaler.fit_transform(train[features])
+    X_train = feature_scaler.fit_transform(train[all_features])
     y_train = target_scaler.fit_transform(train[['Close']]).ravel()
     
-    X_test = feature_scaler.transform(test[features])
+    # Feature Selection using RFE
+    print("\nPerforming RFE feature selection...")
+    rfe = RFE(
+        estimator=RandomForestRegressor(n_estimators=100, random_state=42),
+        n_features_to_select=10,  # Select top 10 features
+        step=1
+    )
+    rfe.fit(X_train, y_train)
+    
+    # Feature Selection using LASSO
+    print("Performing LASSO feature selection...")
+    lasso = LassoCV(cv=5, random_state=42, max_iter=10000)
+    lasso.fit(X_train, y_train)
+    
+    # Get selected features from both methods
+    rfe_features = [f for f, s in zip(all_features, rfe.support_) if s]
+    lasso_features = [f for f, c in zip(all_features, lasso.coef_) if abs(c) > 0]
+    
+    # Combine features from both methods (union)
+    selected_features = list(set(rfe_features + lasso_features))
+    print(f"\nSelected features for {coin}:")
+    print("RFE features:", rfe_features)
+    print("LASSO features:", lasso_features)
+    print("Combined features:", selected_features)
+    
+    # Use only selected features
+    X_train_selected = X_train[:, [all_features.index(f) for f in selected_features]]
+    X_test = feature_scaler.transform(test[all_features])
+    X_test_selected = X_test[:, [all_features.index(f) for f in selected_features]]
     y_test = test['Close'].values
     
-    # Train model
+    # Train model with selected features
     model = RandomForestRegressor(
         n_estimators=100,
         random_state=42,
         n_jobs=-1
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train_selected, y_train)
     
     # Store feature importance
     importance = pd.DataFrame({
-        'Feature': features,
+        'Feature': selected_features,
         'Importance': model.feature_importances_
     }).sort_values('Importance', ascending=False)
     feature_importance[coin] = importance
     
     # Make predictions and inverse transform
-    preds_scaled = model.predict(X_test)
+    preds_scaled = model.predict(X_test_selected)
     preds = target_scaler.inverse_transform(preds_scaled.reshape(-1, 1)).ravel()
     
     # Calculate metrics
@@ -231,7 +288,8 @@ for coin, coin_id in coin_mapping.items():
         'MAE': mae,
         'MSE': mse,
         'RMSE': rmse,
-        'MAPE': mape
+        'MAPE': mape,
+        'Selected_Features': selected_features
     }
     
     # Plot results
