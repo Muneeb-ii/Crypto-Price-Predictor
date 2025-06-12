@@ -21,18 +21,21 @@ for fp in csv_files:
     # Sort by date
     df = df.sort_values('Date').reset_index(drop=True)
     
-    # Create features
+    # Create basic features
     df['Prev_Close'] = df['Close'].shift(1)
+    df['Price_Change'] = df['Close'].pct_change()
+    df['Price_Change_5d'] = df['Close'].pct_change(periods=5)
     df['MA5'] = df['Close'].rolling(5).mean().shift(1)
+    df['MA10'] = df['Close'].rolling(10).mean().shift(1)
     
     # Drop early rows with NaNs
     df.dropna(inplace=True)
     
     # Define features and target
-    features = ['Prev_Close', 'Open', 'High', 'Low', 'Volume', 'MA5']
+    features = ['Prev_Close', 'Open', 'High', 'Low', 'Volume', 'MA5', 'MA10', 'Price_Change', 'Price_Change_5d']
     
     # Split data
-    split_date = pd.Timestamp('2020-01-01')
+    split_date = pd.Timestamp('2021-05-01')
     train = df[df['Date'] < split_date]
     test = df[df['Date'] >= split_date]
     
