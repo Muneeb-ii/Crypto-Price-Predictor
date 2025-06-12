@@ -33,3 +33,11 @@ coin_df.dropna(inplace=True)
 features = ['Prev_Close','Open','High','Low','Volume','MA5']
 X = coin_df[features]
 y = coin_df['Close']
+
+# e.g. train on data before 2020-01-01
+split_date = pd.Timestamp('2020-01-01')
+train = coin_df[coin_df['Date'] < split_date]
+test  = coin_df[coin_df['Date'] >= split_date]
+
+X_train, y_train = train[features], train['Close']
+X_test,  y_test  = test[features],  test['Close']
