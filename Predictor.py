@@ -2,6 +2,7 @@ import pandas as pd
 import glob, os
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -29,8 +30,6 @@ for fp in csv_files:
     
     # Define features and target
     features = ['Prev_Close', 'Open', 'High', 'Low', 'Volume', 'MA5']
-    X = df[features]
-    y = df['Close']
     
     # Split data
     split_date = pd.Timestamp('2020-01-01')
@@ -41,8 +40,16 @@ for fp in csv_files:
         print(f"Skipping {coin} - insufficient data")
         continue
     
-    X_train, y_train = train[features], train['Close']
-    X_test, y_test = test[features], test['Close']
+    # Initialize scalers
+    feature_scaler = MinMaxScaler()
+    target_scaler = MinMaxScaler()
+    
+    # Scale features and target
+    X_train = feature_scaler.fit_transform(train[features])
+    y_train = target_scaler.fit_transform(train[['Close']]).ravel()
+    
+    X_test = feature_scaler.transform(test[features])
+    y_test = test['Close'].values
     
     # Train model
     model = RandomForestRegressor(
@@ -52,8 +59,9 @@ for fp in csv_files:
     )
     model.fit(X_train, y_train)
     
-    # Make predictions
-    preds = model.predict(X_test)
+    # Make predictions and inverse transform
+    preds_scaled = model.predict(X_test)
+    preds = target_scaler.inverse_transform(preds_scaled.reshape(-1, 1)).ravel()
     
     # Calculate metrics
     mae = mean_absolute_error(y_test, preds)
