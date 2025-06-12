@@ -148,6 +148,13 @@ for coin, coin_id in coin_mapping.items():
     df['MACD_Signal'] = signal
     df['MACD_Hist'] = hist
     
+    # Add Bollinger Bands
+    df['BB_Middle'] = df['Close'].rolling(window=20, min_periods=1).mean()
+    df['BB_Upper'] = df['BB_Middle'] + 2 * df['Close'].rolling(window=20, min_periods=1).std()
+    df['BB_Lower'] = df['BB_Middle'] - 2 * df['Close'].rolling(window=20, min_periods=1).std()
+    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']  # Normalized width
+    df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])  # Position within bands
+    
     # Print NaN counts for each feature
     print("\nNaN counts before dropna:")
     print(df.isna().sum())
@@ -166,7 +173,8 @@ for coin, coin_id in coin_mapping.items():
         'MA5', 'MA10', 'Price_Change', 'Price_Change_5d',
         'Volatility', 'High_Low_Range', 'Price_Range_5d',
         'Momentum', 'Momentum_MA5', 'RSI',
-        'MACD', 'MACD_Signal', 'MACD_Hist'
+        'MACD', 'MACD_Signal', 'MACD_Hist',
+        'BB_Middle', 'BB_Upper', 'BB_Lower', 'BB_Width', 'BB_Position'
     ]
     
     # Split data - use last 6 months as test set
