@@ -7,12 +7,18 @@ A machine learning model that predicts cryptocurrency prices using historical da
 - Predicts prices for 23 different cryptocurrencies
 - Uses both historical data and real-time data from CoinGecko
 - Implements various technical indicators:
-  - Moving Averages (MA5, MA10)
+  - Moving Averages (MA5, MA10, MA20, MA50)
   - Price Changes and Momentum
   - Volatility Indicators
   - High-Low Range Analysis
+  - Bollinger Bands
+  - MACD, RSI
+- **Price range-specific models:**
+  - High-value, mid-value, and low-value coins use different feature sets and model parameters for optimal accuracy
+- **Automated feature selection:**
+  - Uses RFE (Recursive Feature Elimination) and LASSO to select the most important features for each coin
 - Generates performance metrics (MAE, MSE, RMSE, MAPE)
-- Creates visualization plots for predictions
+- Creates visualization plots for predictions and RMSE by price range
 
 ## Supported Cryptocurrencies
 
@@ -76,16 +82,19 @@ python Predictor.py
 3. The script will:
    - Load historical data
    - Fetch recent data from CoinGecko
-   - Train the model
+   - Engineer features (including price range-specific features)
+   - Drop rows with missing values
+   - Select the most important features for each coin using RFE and LASSO
+   - Train a price range-specific Random Forest model
    - Generate predictions
    - Save results and plots
 
 ## Output
 
 The script generates:
-- `prediction_metrics.csv`: Contains MAE, MSE, RMSE, and MAPE for each cryptocurrency
+- `prediction_metrics.csv`: Contains MAE, MSE, RMSE, MAPE, selected features, and price range for each cryptocurrency
 - `predictions_[coin].png`: Plot of actual vs predicted prices for each coin
-- `rmse_comparison.png`: Comparison of RMSE across all cryptocurrencies
+- `rmse_comparison_by_range.png`: Comparison of RMSE across all cryptocurrencies, grouped by price range
 
 ## Data Structure
 
@@ -99,13 +108,20 @@ Historical data CSV files should contain the following columns:
 
 ## Model Details
 
-- Uses Random Forest Regressor
+- Uses Random Forest Regressor with price range-specific parameters
 - Features include:
   - Previous day's close price
-  - Price changes
-  - Moving averages
+  - Price changes (1d, 5d, 20d)
+  - Moving averages (MA5, MA10, MA20, MA50)
   - Volatility measures
   - Momentum indicators
+  - Technical indicators (MACD, RSI, Bollinger Bands)
+  - Volume-based features
+- **Price range-specific modeling:**
+  - High-value coins use more sophisticated features and deeper models
+  - Mid-value and low-value coins use tailored feature sets and model complexity
+- **Feature selection:**
+  - RFE and LASSO are used to select the most relevant features for each coin before training
 - Train/Test split: Last 6 months used for testing
 
 ## Notes
@@ -116,8 +132,10 @@ Historical data CSV files should contain the following columns:
 
 ## Future Improvements
 
-- Add more technical indicators
-- Implement cross-validation
-- Add feature importance analysis
-- Include prediction intervals
-- Add support for more cryptocurrencies 
+- Fine-tune model parameters for each price range
+- Implement time-series cross-validation for more robust evaluation
+- Add support for model ensembling (e.g., XGBoost, LightGBM)
+- Integrate additional data sources (on-chain, sentiment, macroeconomic)
+- Improve handling of outlier coins with high error
+- Add prediction intervals and uncertainty estimation
+- Support for more cryptocurrencies and new technical indicators 
