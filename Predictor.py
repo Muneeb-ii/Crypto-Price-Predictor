@@ -1,67 +1,104 @@
 import pandas as pd
 import glob, os
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import numpy as np
 import matplotlib.pyplot as plt
 
 # point to your folder
 csv_files = glob.glob('Historical_Data/coin_*.csv')
 
-dfs = []
+# Dictionary to store results for each coin
+results = {}
+
 for fp in csv_files:
+    # Read and prepare data for each coin
     df = pd.read_csv(fp, parse_dates=['Date'])
-    # extract coin name from filename, e.g. "coin_Bitcoin.csv" → "Bitcoin"
     coin = os.path.basename(fp).split('_', 1)[1].rsplit('.',1)[0]
-    df['Coin'] = coin
-    dfs.append(df)
+    print(f"\nProcessing {coin}...")
+    
+    # Sort by date
+    df = df.sort_values('Date').reset_index(drop=True)
+    
+    # Create features
+    df['Prev_Close'] = df['Close'].shift(1)
+    df['MA5'] = df['Close'].rolling(5).mean().shift(1)
+    
+    # Drop early rows with NaNs
+    df.dropna(inplace=True)
+    
+    # Define features and target
+    features = ['Prev_Close', 'Open', 'High', 'Low', 'Volume', 'MA5']
+    X = df[features]
+    y = df['Close']
+    
+    # Split data
+    split_date = pd.Timestamp('2020-01-01')
+    train = df[df['Date'] < split_date]
+    test = df[df['Date'] >= split_date]
+    
+    if len(train) == 0 or len(test) == 0:
+        print(f"Skipping {coin} - insufficient data")
+        continue
+    
+    X_train, y_train = train[features], train['Close']
+    X_test, y_test = test[features], test['Close']
+    
+    # Train model
+    model = RandomForestRegressor(
+        n_estimators=100,
+        random_state=42,
+        n_jobs=-1
+    )
+    model.fit(X_train, y_train)
+    
+    # Make predictions
+    preds = model.predict(X_test)
+    
+    # Calculate metrics
+    mae = mean_absolute_error(y_test, preds)
+    mse = mean_squared_error(y_test, preds)
+    rmse = np.sqrt(mse)
+    mape = np.mean(np.abs((y_test - preds) / y_test)) * 100
+    
+    # Store results
+    results[coin] = {
+        'MAE': mae,
+        'MSE': mse,
+        'RMSE': rmse,
+        'MAPE': mape
+    }
+    
+    # Plot results
+    plt.figure(figsize=(10,5))
+    plt.plot(test['Date'], y_test, label='Actual')
+    plt.plot(test['Date'], preds, label='Predicted')
+    plt.title(f'{coin} Price Prediction')
+    plt.xlabel('Date')
+    plt.ylabel('Close Price')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'predictions_{coin}.png')
+    plt.close()
 
-data = pd.concat(dfs, ignore_index=True)
-print(data.head())
+# Create a summary DataFrame
+results_df = pd.DataFrame(results).T
+results_df = results_df.round(2)
 
-# pick a single coin
-coin_df = (data
-    .query("Coin == 'Bitcoin'")
-    .sort_values('Date')
-    .reset_index(drop=True)
-)
+# Save results to CSV
+results_df.to_csv('prediction_metrics.csv')
 
-# create lagged & rolling features
-coin_df['Prev_Close'] = coin_df['Close'].shift(1)
-coin_df['MA5']       = coin_df['Close'].rolling(5).mean().shift(1)
+# Print summary
+print("\nPrediction Metrics Summary:")
+print(results_df)
 
-# drop early rows with NaNs
-coin_df.dropna(inplace=True)
-
-# define feature matrix X and target y
-features = ['Prev_Close','Open','High','Low','Volume','MA5']
-X = coin_df[features]
-y = coin_df['Close']
-
-# e.g. train on data before 2020-01-01
-split_date = pd.Timestamp('2020-01-01')
-train = coin_df[coin_df['Date'] < split_date]
-test  = coin_df[coin_df['Date'] >= split_date]
-
-X_train, y_train = train[features], train['Close']
-X_test,  y_test  = test[features],  test['Close']
-
-model = RandomForestRegressor(
-    n_estimators=100,
-    random_state=42,
-    n_jobs=-1
-)
-model.fit(X_train, y_train)
-
-preds = model.predict(X_test)
-mae = mean_absolute_error(y_test, preds)
-print(f"Test MAE: {mae:.2f} USD")
-
-# plot actual vs. predicted
-plt.figure(figsize=(10,5))
-plt.plot(test['Date'], y_test, label='Actual')
-plt.plot(test['Date'], preds, label='Predicted')
-plt.xlabel('Date')
-plt.ylabel('Close Price')
-plt.legend()
+# Plot comparison of RMSE across coins
+plt.figure(figsize=(12,6))
+results_df['RMSE'].sort_values().plot(kind='bar')
+plt.title('RMSE Comparison Across Cryptocurrencies')
+plt.xlabel('Cryptocurrency')
+plt.ylabel('RMSE')
+plt.xticks(rotation=45)
 plt.tight_layout()
-plt.show()
+plt.savefig('rmse_comparison.png')
+plt.close()
