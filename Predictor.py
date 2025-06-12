@@ -28,11 +28,23 @@ for fp in csv_files:
     df['MA5'] = df['Close'].rolling(5).mean().shift(1)
     df['MA10'] = df['Close'].rolling(10).mean().shift(1)
     
+    # Add volatility and momentum features
+    df['Volatility'] = df['Price_Change'].rolling(window=10).std()
+    df['High_Low_Range'] = (df['High'] - df['Low']) / df['Close']
+    df['Price_Range_5d'] = (df['High'].rolling(5).max() - df['Low'].rolling(5).min()) / df['Close']
+    df['Momentum'] = df['Close'] - df['Close'].shift(5)
+    df['Momentum_MA5'] = df['Momentum'].rolling(5).mean()
+    
     # Drop early rows with NaNs
     df.dropna(inplace=True)
     
     # Define features and target
-    features = ['Prev_Close', 'Open', 'High', 'Low', 'Volume', 'MA5', 'MA10', 'Price_Change', 'Price_Change_5d']
+    features = [
+        'Prev_Close', 'Open', 'High', 'Low', 'Volume', 
+        'MA5', 'MA10', 'Price_Change', 'Price_Change_5d',
+        'Volatility', 'High_Low_Range', 'Price_Range_5d',
+        'Momentum', 'Momentum_MA5'
+    ]
     
     # Split data
     split_date = pd.Timestamp('2021-05-01')
