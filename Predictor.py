@@ -1,6 +1,8 @@
 import pandas as pd
 import glob, os
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
 
 # point to your folder
 csv_files = glob.glob('Historical_Data/coin_*.csv')
@@ -49,3 +51,17 @@ model = RandomForestRegressor(
     n_jobs=-1
 )
 model.fit(X_train, y_train)
+
+preds = model.predict(X_test)
+mae = mean_absolute_error(y_test, preds)
+print(f"Test MAE: {mae:.2f} USD")
+
+# plot actual vs. predicted
+plt.figure(figsize=(10,5))
+plt.plot(test['Date'], y_test, label='Actual')
+plt.plot(test['Date'], preds, label='Predicted')
+plt.xlabel('Date')
+plt.ylabel('Close Price')
+plt.legend()
+plt.tight_layout()
+plt.show()
