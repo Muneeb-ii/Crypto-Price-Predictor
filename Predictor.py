@@ -1,5 +1,5 @@
 import pandas as pd
-import glob, os
+import os
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
@@ -8,6 +8,29 @@ import matplotlib.pyplot as plt
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timedelta
 import time
+import seaborn as sns
+
+# Create results directory if it doesn't exist
+results_dir = 'results'
+if not os.path.exists(results_dir):
+    os.makedirs(results_dir)
+
+def calculate_rsi(data, periods=14):
+    """Calculate RSI technical indicator"""
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(data, fast=12, slow=26, signal=9):
+    """Calculate MACD technical indicator"""
+    exp1 = data.ewm(span=fast, adjust=False).mean()
+    exp2 = data.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    histogram = macd - signal_line
+    return macd, signal_line, histogram
 
 def fetch_coingecko_data(coin_id, days=365):
     """Fetch historical data from CoinGecko API"""
@@ -73,6 +96,7 @@ coin_mapping = {
 
 # Dictionary to store results for each coin
 results = {}
+feature_importance = {}
 
 # Process each coin
 for coin, coin_id in coin_mapping.items():
@@ -115,6 +139,15 @@ for coin, coin_id in coin_mapping.items():
     df['Momentum'] = df['Close'] - df['Close'].shift(5)
     df['Momentum_MA5'] = df['Momentum'].rolling(5, min_periods=1).mean()
     
+    # Add RSI
+    df['RSI'] = calculate_rsi(df['Close'])
+    
+    # Add MACD
+    macd, signal, hist = calculate_macd(df['Close'])
+    df['MACD'] = macd
+    df['MACD_Signal'] = signal
+    df['MACD_Hist'] = hist
+    
     # Print NaN counts for each feature
     print("\nNaN counts before dropna:")
     print(df.isna().sum())
@@ -132,7 +165,8 @@ for coin, coin_id in coin_mapping.items():
         'Prev_Close', 'Open', 'High', 'Low', 'Volume', 
         'MA5', 'MA10', 'Price_Change', 'Price_Change_5d',
         'Volatility', 'High_Low_Range', 'Price_Range_5d',
-        'Momentum', 'Momentum_MA5'
+        'Momentum', 'Momentum_MA5', 'RSI',
+        'MACD', 'MACD_Signal', 'MACD_Hist'
     ]
     
     # Split data - use last 6 months as test set
@@ -167,6 +201,13 @@ for coin, coin_id in coin_mapping.items():
     )
     model.fit(X_train, y_train)
     
+    # Store feature importance
+    importance = pd.DataFrame({
+        'Feature': features,
+        'Importance': model.feature_importances_
+    }).sort_values('Importance', ascending=False)
+    feature_importance[coin] = importance
+    
     # Make predictions and inverse transform
     preds_scaled = model.predict(X_test)
     preds = target_scaler.inverse_transform(preds_scaled.reshape(-1, 1)).ravel()
@@ -194,10 +235,10 @@ for coin, coin_id in coin_mapping.items():
     plt.ylabel('Close Price')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'predictions_{coin}.png')
+    plt.savefig(os.path.join(results_dir, f'predictions_{coin}.png'))
     plt.close()
     
-    # Add a small delay between API calls (2 seconds is more than enough for 30 calls/minute)
+    # Add a small delay between API calls
     time.sleep(2)
 
 # Create a summary DataFrame
@@ -205,11 +246,69 @@ results_df = pd.DataFrame(results).T
 results_df = results_df.round(2)
 
 # Save results to CSV
-results_df.to_csv('prediction_metrics.csv')
+results_df.to_csv(os.path.join(results_dir, 'prediction_metrics.csv'))
 
 # Print summary
 print("\nPrediction Metrics Summary:")
 print(results_df)
+
+# Analyze feature importance by price range
+def get_price_range(coin):
+    avg_price = historical_df[historical_df['Date'] >= split_date]['Close'].mean()
+    if avg_price > 1000:
+        return 'High'
+    elif avg_price > 10:
+        return 'Medium'
+    else:
+        return 'Low'
+
+# Group coins by price range
+price_ranges = {coin: get_price_range(coin) for coin in results.keys()}
+range_groups = {'High': [], 'Medium': [], 'Low': []}
+for coin, price_range in price_ranges.items():
+    range_groups[price_range].append(coin)
+
+# Calculate average feature importance for each price range
+range_importance = {}
+for price_range, coins in range_groups.items():
+    if coins:
+        # Combine feature importance for all coins in this range
+        combined_importance = pd.concat([feature_importance[coin] for coin in coins])
+        # Calculate mean importance for each feature
+        mean_importance = combined_importance.groupby('Feature')['Importance'].mean().reset_index()
+        mean_importance = mean_importance.sort_values('Importance', ascending=False)
+        range_importance[price_range] = mean_importance
+
+# Plot feature importance for each price range
+plt.figure(figsize=(15, 10))
+for i, (price_range, importance) in enumerate(range_importance.items(), 1):
+    plt.subplot(3, 1, i)
+    sns.barplot(data=importance.head(10), x='Importance', y='Feature')
+    plt.title(f'Top 10 Most Important Features - {price_range} Price Range')
+    plt.xlabel('Feature Importance')
+    plt.ylabel('Feature')
+plt.tight_layout()
+plt.savefig(os.path.join(results_dir, 'feature_importance_by_range.png'))
+plt.close()
+
+# Save detailed feature importance to Excel
+with pd.ExcelWriter(os.path.join(results_dir, 'feature_importance_analysis.xlsx')) as writer:
+    # Save overall results
+    results_df.to_excel(writer, sheet_name='Prediction Metrics')
+    
+    # Save feature importance for each price range
+    for price_range, importance in range_importance.items():
+        importance.to_excel(writer, sheet_name=f'{price_range} Range Features', index=False)
+    
+    # Save individual coin feature importance
+    for coin, importance in feature_importance.items():
+        importance.to_excel(writer, sheet_name=f'{coin} Features', index=False)
+
+# Print top features for each price range
+print("\nTop 5 Most Important Features by Price Range:")
+for price_range, importance in range_importance.items():
+    print(f"\n{price_range} Price Range:")
+    print(importance.head().to_string(index=False))
 
 # Plot comparison of RMSE across coins
 plt.figure(figsize=(12,6))
@@ -219,5 +318,5 @@ plt.xlabel('Cryptocurrency')
 plt.ylabel('RMSE')
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig('rmse_comparison.png')
+plt.savefig(os.path.join(results_dir, 'rmse_comparison.png'))
 plt.close()
