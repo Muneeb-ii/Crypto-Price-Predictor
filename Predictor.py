@@ -16,6 +16,7 @@ import sys
 import gc
 import psutil
 from tqdm import tqdm
+import seaborn as sns
 
 def check_directories():
     """Check if required directories exist and create them if needed"""
@@ -424,52 +425,57 @@ def create_plots(coin, test, y_test, preds, price_range, feature_importance, pdf
 
 def create_summary_plots(results_df, pdf):
     """Create summary plots for all coins"""
-    # Plot 1: RMSE Comparison by Price Range
-    fig = plt.figure(figsize=(15, 10))
+    fig, axs = plt.subplots(2, 2, figsize=(15, 10))
     
-    plt.subplot(2, 2, 1)
-    for range_name in ['high', 'mid', 'low']:
+    # Plot 1: RMSE Comparison by Price Range
+    ax = axs[0, 0]
+    for range_name, color in zip(['high', 'mid', 'low'], ['tab:blue', 'tab:orange', 'tab:green']):
         range_results = results_df[results_df['Price_Range'] == range_name]
-        plt.bar(range_results.index, range_results['RMSE'], label=range_name.upper())
-    plt.title('RMSE Comparison Across Cryptocurrencies by Price Range')
-    plt.xlabel('Cryptocurrency')
-    plt.ylabel('RMSE')
-    plt.xticks(rotation=45)
-    plt.legend()
+        ax.bar(range_results.index, range_results['RMSE'], label=range_name.upper(), color=color)
+    ax.set_title('RMSE Comparison Across Cryptocurrencies by Price Range')
+    ax.set_xlabel('Cryptocurrency')
+    ax.set_ylabel('RMSE')
+    ax.set_xticks(range(len(results_df.index)))
+    ax.set_xticklabels(results_df.index, rotation=45, ha='right', fontsize=8)
+    ax.legend()
     
     # Plot 2: MAPE Comparison by Price Range
-    plt.subplot(2, 2, 2)
-    for range_name in ['high', 'mid', 'low']:
+    ax = axs[0, 1]
+    for range_name, color in zip(['high', 'mid', 'low'], ['tab:blue', 'tab:orange', 'tab:green']):
         range_results = results_df[results_df['Price_Range'] == range_name]
-        plt.bar(range_results.index, range_results['MAPE'], label=range_name.upper())
-    plt.title('MAPE Comparison Across Cryptocurrencies by Price Range')
-    plt.xlabel('Cryptocurrency')
-    plt.ylabel('MAPE (%)')
-    plt.xticks(rotation=45)
-    plt.legend()
+        ax.bar(range_results.index, range_results['MAPE'], label=range_name.upper(), color=color)
+    ax.set_title('MAPE Comparison Across Cryptocurrencies by Price Range')
+    ax.set_xlabel('Cryptocurrency')
+    ax.set_ylabel('MAPE (%)')
+    ax.set_xticks(range(len(results_df.index)))
+    ax.set_xticklabels(results_df.index, rotation=45, ha='right', fontsize=8)
+    ax.legend()
     
-    # Plot 3: Box Plot of Metrics by Price Range
-    plt.subplot(2, 2, 3)
-    metrics = ['RMSE', 'MAPE']
-    data = []
-    labels = []
+    # Plot 3: Box Plot of RMSE and MAPE by Price Range (split into two subplots)
+    # RMSE boxplot
+    ax = axs[1, 0]
+    sns.boxplot(x='Price_Range', y='RMSE', data=results_df, ax=ax, palette='Set2')
+    ax.set_title('RMSE Distribution by Price Range')
+    ax.set_xlabel('Price Range')
+    ax.set_ylabel('RMSE')
+    # MAPE boxplot
+    ax2 = ax.twinx()
+    sns.boxplot(x='Price_Range', y='MAPE', data=results_df, ax=ax2, palette='Set1', boxprops=dict(alpha=0.3))
+    ax2.set_ylabel('MAPE (%)')
+    ax2.set_yticks(ax2.get_yticks())
+    ax2.set_yticklabels([f'{y:.1f}' for y in ax2.get_yticks()])
+    ax2.grid(False)
+    
+    # Plot 4: Scatter plot of RMSE vs. MAPE colored by price range
+    ax = axs[1, 1]
+    colors = {'high': 'tab:blue', 'mid': 'tab:orange', 'low': 'tab:green'}
     for range_name in ['high', 'mid', 'low']:
-        range_results = results_df[results_df['Price_Range'] == range_name]
-        for metric in metrics:
-            data.append(range_results[metric])
-            labels.append(f'{range_name.upper()}\n{metric}')
-    plt.boxplot(data, labels=labels)
-    plt.title('Distribution of Metrics by Price Range')
-    plt.xticks(rotation=45)
-    
-    # Plot 4: Average Metrics by Price Range
-    plt.subplot(2, 2, 4)
-    avg_metrics = results_df.groupby('Price_Range')[['RMSE', 'MAPE']].mean()
-    avg_metrics.plot(kind='bar')
-    plt.title('Average Metrics by Price Range')
-    plt.xlabel('Price Range')
-    plt.ylabel('Value')
-    plt.legend(['RMSE', 'MAPE'])
+        subset = results_df[results_df['Price_Range'] == range_name]
+        ax.scatter(subset['RMSE'], subset['MAPE'], label=range_name.upper(), color=colors[range_name], s=60, alpha=0.7, edgecolor='k')
+    ax.set_title('RMSE vs. MAPE by Price Range')
+    ax.set_xlabel('RMSE')
+    ax.set_ylabel('MAPE (%)')
+    ax.legend()
     
     plt.tight_layout()
     pdf.savefig(fig)
