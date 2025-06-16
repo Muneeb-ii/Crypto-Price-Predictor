@@ -329,6 +329,12 @@ def create_features(df, is_training=True):
     """Create features for the dataset, ensuring no data leakage"""
     df = df.copy()
     
+    # Calculate VWAP
+    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+    df['VWAP_MA5'] = df['VWAP'].rolling(window=5, min_periods=1).mean().shift(1)
+    df['VWAP_MA20'] = df['VWAP'].rolling(window=20, min_periods=1).mean().shift(1)
+    df['Price_vs_VWAP'] = (df['Close'] - df['VWAP']) / df['VWAP']  # Normalized price difference from VWAP
+    
     # Basic price features (no leakage as they use only current or past data)
     df['Prev_Close'] = df['Close'].shift(1)
     df['Price_Change'] = df['Close'].pct_change()
