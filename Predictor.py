@@ -12,7 +12,6 @@ from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timedelta
 import time
 from xgboost import XGBRegressor
-import sys
 import gc
 import psutil
 from tqdm import tqdm
@@ -535,17 +534,18 @@ def process_coin(coin_id, historical_data, recent_data, pdf):
         
         print(f"Selected features: {selected_features}")
         
-        # Update feature sets with selected features
-        X_train = X_train[selected_features]
-        X_test = X_test[selected_features]
+        # Use only selected features (as DataFrames, not NumPy arrays)
+        X_train_selected = X_train[selected_features]
+        X_test_selected = X_test[selected_features]
+        y_test = test['Close'].values
         
-        # Train model
+        # Train model with selected features and range-specific parameters
         model = create_ensemble_model(get_price_range(coin_id))
-        model.fit(X_train, y_train)
+        model.fit(X_train_selected, y_train)
         
         # Store feature importance (using RandomForest's importance as reference)
         rf_model = RandomForestRegressor(**range_config[get_price_range(coin_id)]['model_params'])
-        rf_model.fit(X_train, y_train)
+        rf_model.fit(X_train_selected, y_train)
         importance = pd.DataFrame({
             'Feature': selected_features,
             'Importance': rf_model.feature_importances_
@@ -553,7 +553,7 @@ def process_coin(coin_id, historical_data, recent_data, pdf):
         feature_importance[coin_id] = importance
         
         # Make predictions
-        preds_scaled = model.predict(X_test)
+        preds_scaled = model.predict(X_test_selected)
         preds = preds_scaled
         
         # Calculate metrics
@@ -578,15 +578,21 @@ def process_coin(coin_id, historical_data, recent_data, pdf):
         print(f"Error processing {coin_id}: {str(e)}")
         return None
 
-def forecast_next_month(model, last_known_df, feature_columns, n_days=30):
+def forecast_next_month(model, last_known_df, selected_features, n_days=30):
     """Forecast the next n_days using recursive prediction and return predictions and confidence intervals."""
     preds = []
     lower_bounds = []
     upper_bounds = []
     df = last_known_df.copy()
     for i in range(n_days):
-        # Generate features for the next day
-        features = df.iloc[-1:][feature_columns]
+        # Recalculate all features after appending new row
+        df = create_features(df)
+        # Use only the last row for prediction, with selected features only
+        features = df.iloc[[-1]][selected_features]
+        # Check for missing columns or NaNs
+        if features.isnull().any().any() or (set(selected_features) - set(features.columns)):
+            print(f"Warning: Missing or NaN features at step {i+1}, stopping forecast early.")
+            break
         pred = model.predict(features)[0]
         # Confidence interval using RandomForest (std of estimators)
         if hasattr(model, 'estimators_'):
@@ -597,15 +603,17 @@ def forecast_next_month(model, last_known_df, feature_columns, n_days=30):
         preds.append(pred)
         lower_bounds.append(pred - 1.96 * std)
         upper_bounds.append(pred + 1.96 * std)
-        # Append the prediction to df for next step's feature calculation
-        new_row = df.iloc[-1:].copy()
+        # Prepare new row for next step
+        new_row = df.iloc[[-1]].copy()
         new_row['Close'] = pred
-        # Update lagged features (rolling, etc.)
+        # For all other columns except 'Date', update as needed (keep Date as next day if possible)
+        if 'Date' in new_row.columns:
+            new_row['Date'] = new_row['Date'] + pd.Timedelta(days=1)
         df = pd.concat([df, new_row], ignore_index=True)
-        df = create_features(df)
     return preds, lower_bounds, upper_bounds
 
-def plot_forecast_with_confidence(ax, dates, actual, forecast_dates, forecast, lower, upper):
+def plot_forecast_with_confidence(ax, dates, actual, last_date, forecast, lower, upper):
+    forecast_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=len(forecast), freq='D')
     ax.plot(dates, actual, label='Actual', color='blue')
     ax.plot(forecast_dates, forecast, 'r--', label='1-Month Forecast')
     ax.fill_between(forecast_dates, lower, upper, color='red', alpha=0.2, label='95% CI')
@@ -679,7 +687,10 @@ with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
             target_scaler = MinMaxScaler()
             
             # Scale features and target
-            X_train = feature_scaler.fit_transform(train[config['features']])
+            X_train_df = train[config['features']]
+            X_test_df = test[config['features']]
+            X_train = pd.DataFrame(feature_scaler.fit_transform(X_train_df), columns=config['features'], index=X_train_df.index)
+            X_test = pd.DataFrame(feature_scaler.transform(X_test_df), columns=config['features'], index=X_test_df.index)
             y_train = target_scaler.fit_transform(train[['Close']]).ravel()
             
             # Feature Selection using RFE
@@ -705,10 +716,9 @@ with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
                 print(f"No features selected for {coin}, using all features...")
                 selected_features = config['features']
             
-            # Use only selected features
-            X_train_selected = X_train[:, [config['features'].index(f) for f in selected_features]]
-            X_test = feature_scaler.transform(test[config['features']])
-            X_test_selected = X_test[:, [config['features'].index(f) for f in selected_features]]
+            # Use only selected features (as DataFrames, not NumPy arrays)
+            X_train_selected = X_train[selected_features]
+            X_test_selected = X_test[selected_features]
             y_test = test['Close'].values
             
             # Train model with selected features and range-specific parameters
@@ -754,28 +764,21 @@ with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
                 'Memory': f"{get_memory_usage():.0f}MB"
             })
             
-            # Clear memory after processing each coin
-            clear_memory()
-            
-            # Retrain model on all data
-            model = create_ensemble_model(price_range)
-            model.fit(X_train_selected, y_train)
-            
             # Forecast next month
-            preds, lower_bounds, upper_bounds = forecast_next_month(model, df, config['features'])
+            preds, lower_bounds, upper_bounds = forecast_next_month(model, df, selected_features)
             
             # Plot actual vs. forecast with confidence interval
             fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-            plot_forecast_with_confidence(ax, df['Date'], df['Close'], df['Date'] + timedelta(days=30), preds, lower_bounds, upper_bounds)
+            plot_forecast_with_confidence(ax, df['Date'], df['Close'], df['Date'].iloc[-1], preds, lower_bounds, upper_bounds)
             pdf.savefig(fig)
             plt.close()
             
         except Exception as e:
             print(f"Error processing {coin}: {str(e)}")
-            clear_memory()  # Clear memory even if there's an error
             continue
-        
-        time.sleep(2)  # Respect API rate limits
+        finally:
+            clear_memory()  # Always clear memory after each coin
+            time.sleep(2)  # Respect API rate limits
     
     # Create summary plots at the end
     results_df = pd.DataFrame(results).T
