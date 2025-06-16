@@ -578,6 +578,42 @@ def process_coin(coin_id, historical_data, recent_data, pdf):
         print(f"Error processing {coin_id}: {str(e)}")
         return None
 
+def forecast_next_month(model, last_known_df, feature_columns, n_days=30):
+    """Forecast the next n_days using recursive prediction and return predictions and confidence intervals."""
+    preds = []
+    lower_bounds = []
+    upper_bounds = []
+    df = last_known_df.copy()
+    for i in range(n_days):
+        # Generate features for the next day
+        features = df.iloc[-1:][feature_columns]
+        pred = model.predict(features)[0]
+        # Confidence interval using RandomForest (std of estimators)
+        if hasattr(model, 'estimators_'):
+            all_preds = np.array([tree.predict(features)[0] for tree in model.estimators_])
+            std = np.std(all_preds)
+        else:
+            std = 0.0
+        preds.append(pred)
+        lower_bounds.append(pred - 1.96 * std)
+        upper_bounds.append(pred + 1.96 * std)
+        # Append the prediction to df for next step's feature calculation
+        new_row = df.iloc[-1:].copy()
+        new_row['Close'] = pred
+        # Update lagged features (rolling, etc.)
+        df = pd.concat([df, new_row], ignore_index=True)
+        df = create_features(df)
+    return preds, lower_bounds, upper_bounds
+
+def plot_forecast_with_confidence(ax, dates, actual, forecast_dates, forecast, lower, upper):
+    ax.plot(dates, actual, label='Actual', color='blue')
+    ax.plot(forecast_dates, forecast, 'r--', label='1-Month Forecast')
+    ax.fill_between(forecast_dates, lower, upper, color='red', alpha=0.2, label='95% CI')
+    ax.set_title('1-Month Ahead Forecast with Confidence Interval')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Close Price')
+    ax.legend()
+
 # Process each coin
 with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
     # Create progress bar
@@ -720,6 +756,19 @@ with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
             
             # Clear memory after processing each coin
             clear_memory()
+            
+            # Retrain model on all data
+            model = create_ensemble_model(price_range)
+            model.fit(X_train_selected, y_train)
+            
+            # Forecast next month
+            preds, lower_bounds, upper_bounds = forecast_next_month(model, df, config['features'])
+            
+            # Plot actual vs. forecast with confidence interval
+            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+            plot_forecast_with_confidence(ax, df['Date'], df['Close'], df['Date'] + timedelta(days=30), preds, lower_bounds, upper_bounds)
+            pdf.savefig(fig)
+            plt.close()
             
         except Exception as e:
             print(f"Error processing {coin}: {str(e)}")
