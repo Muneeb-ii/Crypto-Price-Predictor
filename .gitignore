@@ -207,4 +207,3 @@ cython_debug/
 *.webp
 *.svg
 *.eps
-*.pdf
