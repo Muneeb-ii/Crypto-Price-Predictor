@@ -578,35 +578,33 @@ def process_coin(coin_id, historical_data, recent_data, pdf):
         print(f"Error processing {coin_id}: {str(e)}")
         return None
 
-def forecast_next_month(model, last_known_df, selected_features, n_days=30):
-    """Forecast the next n_days using recursive prediction and return predictions and confidence intervals."""
+def forecast_next_month(model, last_known_df, selected_features, target_scaler, n_days=30):
+    """Forecast the next n_days using recursive prediction and return predictions and confidence intervals in original price scale."""
     preds = []
     lower_bounds = []
     upper_bounds = []
     df = last_known_df.copy()
     for i in range(n_days):
-        # Recalculate all features after appending new row
         df = create_features(df)
-        # Use only the last row for prediction, with selected features only
         features = df.iloc[[-1]][selected_features]
-        # Check for missing columns or NaNs
         if features.isnull().any().any() or (set(selected_features) - set(features.columns)):
             print(f"Warning: Missing or NaN features at step {i+1}, stopping forecast early.")
             break
-        pred = model.predict(features)[0]
-        # Confidence interval using RandomForest (std of estimators)
+        pred_scaled = model.predict(features)[0]
         if hasattr(model, 'estimators_'):
             all_preds = np.array([tree.predict(features)[0] for tree in model.estimators_])
             std = np.std(all_preds)
         else:
             std = 0.0
+        # Inverse transform prediction and bounds
+        pred = target_scaler.inverse_transform([[pred_scaled]])[0, 0]
+        lower = target_scaler.inverse_transform([[pred_scaled - 1.96 * std]])[0, 0]
+        upper = target_scaler.inverse_transform([[pred_scaled + 1.96 * std]])[0, 0]
         preds.append(pred)
-        lower_bounds.append(pred - 1.96 * std)
-        upper_bounds.append(pred + 1.96 * std)
-        # Prepare new row for next step
+        lower_bounds.append(lower)
+        upper_bounds.append(upper)
         new_row = df.iloc[[-1]].copy()
-        new_row['Close'] = pred
-        # For all other columns except 'Date', update as needed (keep Date as next day if possible)
+        new_row['Close'] = pred  # Use the inverse-transformed value for next step
         if 'Date' in new_row.columns:
             new_row['Date'] = new_row['Date'] + pd.Timedelta(days=1)
         df = pd.concat([df, new_row], ignore_index=True)
@@ -765,7 +763,7 @@ with PdfPages(os.path.join(results_dir, 'prediction_report.pdf')) as pdf:
             })
             
             # Forecast next month
-            preds, lower_bounds, upper_bounds = forecast_next_month(model, df, selected_features)
+            preds, lower_bounds, upper_bounds = forecast_next_month(model, df, selected_features, target_scaler)
             
             # Plot actual vs. forecast with confidence interval
             fig, ax = plt.subplots(1, 1, figsize=(10, 5))
