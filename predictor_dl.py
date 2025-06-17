@@ -4,11 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from pycoingecko import CoinGeckoAPI
-from datetime import timedelta
+from datetime import datetime, timedelta
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Add, LayerNormalization
 from tensorflow.keras.callbacks import EarlyStopping
 from tqdm import tqdm
 import seaborn as sns
@@ -59,12 +59,13 @@ price_ranges = {
 # LSTM model configurations optimized for different price ranges
 lstm_config = {
     'high': {
-        'units': 128,
+        'units': 256,  # Increased capacity for complex patterns
         'dropout': 0.3,
-        'dense_units': 64,
+        'dense_units': 128,
         'batch_size': 32,
-        'epochs': 100,
-        'patience': 20
+        'epochs': 150,  # More epochs for complex model
+        'patience': 25,
+        'price_range': 'high'
     },
     'mid': {
         'units': 64,
@@ -72,7 +73,8 @@ lstm_config = {
         'dense_units': 32,
         'batch_size': 32,
         'epochs': 80,
-        'patience': 15
+        'patience': 15,
+        'price_range': 'mid'
     },
     'low': {
         'units': 32,
@@ -80,7 +82,8 @@ lstm_config = {
         'dense_units': 16,
         'batch_size': 32,
         'epochs': 60,
-        'patience': 10
+        'patience': 10,
+        'price_range': 'low'
     }
 }
 
@@ -172,18 +175,50 @@ def get_price_range(coin_id):
     return 'low'
 
 def create_lstm_model(input_shape, config):
-    """Create LSTM model with specified configuration"""
-    model = Sequential([
-        Input(shape=input_shape),
-        LSTM(config['units'], return_sequences=True),
-        Dropout(config['dropout']),
-        LSTM(config['units'] // 2, return_sequences=False),
-        Dropout(config['dropout']),
-        Dense(config['dense_units'], activation='relu'),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    return model
+    """Create LSTM model with price-range specific architecture"""
+    if config.get('price_range') == 'high':
+        # Enhanced architecture for high-range coins
+        inputs = Input(shape=input_shape)
+        
+        # First LSTM block with residual connection
+        x = LSTM(config['units'], return_sequences=True)(inputs)
+        x = LayerNormalization()(x)
+        x = Dropout(config['dropout'])(x)
+        
+        # Second LSTM block with residual connection
+        lstm_out = LSTM(config['units'], return_sequences=True)(x)
+        lstm_out = LayerNormalization()(lstm_out)
+        x = Add()([x, lstm_out])  # Residual connection
+        x = Dropout(config['dropout'])(x)
+        
+        # Third LSTM block
+        x = LSTM(config['units'] // 2, return_sequences=False)(x)
+        x = LayerNormalization()(x)
+        x = Dropout(config['dropout'])(x)
+        
+        # Dense layers
+        x = Dense(config['dense_units'], activation='relu')(x)
+        x = LayerNormalization()(x)
+        x = Dropout(config['dropout'] / 2)(x)
+        
+        outputs = Dense(1)(x)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        model.compile(optimizer='adam', loss='mse')
+        return model
+    else:
+        # Standard architecture for mid and low-range coins
+        model = Sequential([
+            Input(shape=input_shape),
+            LSTM(config['units'], return_sequences=True),
+            Dropout(config['dropout']),
+            LSTM(config['units'] // 2, return_sequences=False),
+            Dropout(config['dropout']),
+            Dense(config['dense_units'], activation='relu'),
+            Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        return model
 
 def create_sequences(data, window=30):
     """Create sequences for LSTM input"""
@@ -192,6 +227,28 @@ def create_sequences(data, window=30):
         X.append(data[i:i+window])
         y.append(data[i+window, 0])  # Predict next day's close price
     return np.array(X), np.array(y)
+
+def normalize_data(data, price_range):
+    """Normalize data based on price range"""
+    data = data.copy()
+    
+    if price_range == 'high':
+        # For price data (Close prices), ensure positive values
+        if data.shape[1] == 1:  # Target variable
+            data = np.abs(data)
+        else:  # Features
+            min_vals = data.min(axis=0)
+            if (min_vals < 0).any():
+                data = data - min_vals + 1e-6
+        
+        # Log transform + MinMax scaling
+        data = np.log1p(data)
+        scaler = MinMaxScaler()
+        return scaler.fit_transform(data), scaler
+    
+    # For mid and low range coins, use standard MinMax scaling
+    scaler = MinMaxScaler()
+    return scaler.fit_transform(data), scaler
 
 def process_coin(coin, coin_id, historical_df, recent_df):
     """Process a single cryptocurrency"""
@@ -252,6 +309,12 @@ def process_coin(coin, coin_id, historical_df, recent_df):
             print(f"Train features shape: {train.shape}")
             print(f"Test features shape: {test.shape}")
             
+            # Validate features
+            if train.isnull().any().any() or test.isnull().any().any():
+                print(f"Warning: NaN values in features, filling with appropriate values...")
+                train = train.fillna(method='ffill').fillna(method='bfill')
+                test = test.fillna(method='ffill').fillna(method='bfill')
+            
         except ValueError as e:
             print(f"Error in feature creation for {coin}: {str(e)}")
             return None
@@ -268,20 +331,9 @@ def process_coin(coin, coin_id, historical_df, recent_df):
         # Prepare features
         feature_cols = [col for col in train.columns if col not in ['Date', 'Close']]
         
-        # Debug: Print feature columns
-        print(f"Number of feature columns: {len(feature_cols)}")
-        
-        # Scale features and target
-        feature_scaler = MinMaxScaler()
-        target_scaler = MinMaxScaler()
-        
-        # Scale training data
-        X_train_scaled = feature_scaler.fit_transform(train[feature_cols])
-        y_train_scaled = target_scaler.fit_transform(train[['Close']])
-        
-        # Debug: Print scaled data shapes
-        print(f"X_train_scaled shape: {X_train_scaled.shape}")
-        print(f"y_train_scaled shape: {y_train_scaled.shape}")
+        # Scale features and target using price-range specific normalization
+        X_train_scaled, feature_scaler = normalize_data(train[feature_cols], price_range)
+        y_train_scaled, target_scaler = normalize_data(train[['Close']], price_range)
         
         # Scale test data using training scalers
         X_test_scaled = feature_scaler.transform(test[feature_cols])
@@ -302,7 +354,7 @@ def process_coin(coin, coin_id, historical_df, recent_df):
             return None
         
         # Create and train model
-        print(f"Training LSTM model for {coin}...")
+        print(f"Training LSTM model for {coin} ({price_range} range)...")
         model = create_lstm_model((window, len(feature_cols)), config)
         
         early_stopping = EarlyStopping(
