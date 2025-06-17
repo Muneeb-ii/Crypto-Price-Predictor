@@ -75,12 +75,12 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
   - Sequence length of 60 time steps
   - Mixed precision training for better performance
 
-#### Model Differences
+### Model Differences
 - **ML Model**: Uses both historical and recent data, making predictions for the last 6 months
 - **DL Model**: Uses only historical data (up to 2021) due to the data gap between historical and recent data
 - **Reason for Difference**: The large gap in data (2021 to present) makes it challenging for the LSTM model to learn meaningful patterns across this discontinuity
 
-#### Future Improvements
+### Future Improvements
 - Working on gathering the missing data between 2021 and present
 - Planning to update the DL model once the complete dataset is available
 - Aiming to achieve consistent performance across both models with complete data
