@@ -4,8 +4,9 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
 
 ## Data Sources
 
-- **Historical Data**: Kaggle dataset containing historical price data for 23 cryptocurrencies
-- **Recent Data**: CoinGecko API for up-to-date price information
+- **Historical Data**: Kaggle dataset containing historical price data for 23 cryptocurrencies up until 2021
+- **Recent Data**: CoinGecko API for up-to-date price information (limited to last 365 days)
+- **Data Gap**: There is a gap between the historical data (ending 2021) and recent data (last 365 days)
 - **Data Structure**: Each cryptocurrency's data includes Date, Open, High, Low, Close, and Volume
 
 ## Models
@@ -61,32 +62,28 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
   - Tron: 3.97% MAPE
   - Cardano: 2.56% MAPE
 
-### 2. Deep Learning Model (LSTM)
+### 2. Deep Learning Model (DL)
 
 #### Architecture
-- **Sequential LSTM Model**:
-  - Input Layer: 60 time steps
-  - LSTM Layer 1: 100 units with return sequences
-  - Dropout Layer: 0.2
-  - LSTM Layer 2: 50 units
-  - Dropout Layer: 0.2
-  - Dense Layer: 25 units
-  - Output Layer: 1 unit
+- **LSTM Model**: Sequential model with:
+  - Two LSTM layers (100 and 50 units)
+  - Dropout layers (0.2) for regularization
+  - Dense layers for final prediction
+- **Training Process**:
+  - Uses only historical data (up to 2021)
+  - 70-10-20 split for train-validation-test
+  - Sequence length of 60 time steps
+  - Mixed precision training for better performance
 
-#### Training Process
-- **Data Split**: 70% training, 10% validation, 20% testing
-- **Sequence Creation**: 60-day lookback period
-- **Optimization**:
-  - Mixed precision training (float16)
-  - XLA compilation enabled
-  - Early stopping with patience=10
+#### Model Differences
+- **ML Model**: Uses both historical and recent data, making predictions for the last 6 months
+- **DL Model**: Uses only historical data (up to 2021) due to the data gap between historical and recent data
+- **Reason for Difference**: The large gap in data (2021 to present) makes it challenging for the LSTM model to learn meaningful patterns across this discontinuity
 
-#### Training Parameters
-- Batch Size: 32
-- Epochs: 100 (with early stopping)
-- Learning Rate: 0.001
-- Optimizer: Adam
-- Loss Function: Mean Squared Error
+#### Future Improvements
+- Working on gathering the missing data between 2021 and present
+- Planning to update the DL model once the complete dataset is available
+- Aiming to achieve consistent performance across both models with complete data
 
 #### Performance Metrics (LSTM Model)
 - **Best Performing Coins**:
