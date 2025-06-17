@@ -1,163 +1,28 @@
 import pandas as pd
-import os
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-from pycoingecko import CoinGeckoAPI
-from datetime import datetime, timedelta
+import os
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Add, LayerNormalization
-from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from tqdm import tqdm
 import seaborn as sns
 
-# Core constants for data processing and model configuration
+# Constants
 RESULTS_DIR = 'results/lstm_prediction_report'
 HISTORICAL_DATA_DIR = 'Historical_Data'
-MIN_TRAIN_SIZE = 100
-MIN_TEST_SIZE = 30
-TEST_PERIOD_DAYS = 180
+SEQUENCE_LENGTH = 60  # Number of time steps to look back
+BATCH_SIZE = 32
+EPOCHS = 100
+LEARNING_RATE = 0.001
 
-# CoinGecko API mapping for cryptocurrency data retrieval
-coin_mapping = {
-    'Aave': 'aave',
-    'BinanceCoin': 'binancecoin',
-    'Bitcoin': 'bitcoin',
-    'Cardano': 'cardano',
-    'ChainLink': 'chainlink',
-    'Cosmos': 'cosmos',
-    'CryptocomCoin': 'crypto-com-chain',
-    'Dogecoin': 'dogecoin',
-    'EOS': 'eos',
-    'Ethereum': 'ethereum',
-    'Iota': 'iota',
-    'Litecoin': 'litecoin',
-    'Monero': 'monero',
-    'NEM': 'nem',
-    'Polkadot': 'polkadot',
-    'Solana': 'solana',
-    'Stellar': 'stellar',
-    'Tether': 'tether',
-    'Tron': 'tron',
-    'USDCoin': 'usd-coin',
-    'Uniswap': 'uniswap',
-    'WrappedBitcoin': 'wrapped-bitcoin',
-    'XRP': 'ripple'
-}
-
-# Cryptocurrency price range categorization
-high_range_coins = ['bitcoin', 'wrapped-bitcoin', 'ethereum']
-mid_range_coins = ['binancecoin', 'solana', 'cardano', 'polkadot', 'chainlink', 'uniswap']
-price_ranges = {
-    'high': high_range_coins,
-    'mid': mid_range_coins,
-    'low': [coin_id for coin_id in coin_mapping.values() if coin_id not in high_range_coins + mid_range_coins]
-}
-
-# LSTM model configurations optimized for different price ranges
-lstm_config = {
-    'high': {
-        'units': 256,  # Increased capacity for complex patterns
-        'dropout': 0.3,
-        'dense_units': 128,
-        'batch_size': 32,
-        'epochs': 150,  # More epochs for complex model
-        'patience': 25,
-        'price_range': 'high'
-    },
-    'mid': {
-        'units': 64,
-        'dropout': 0.2,
-        'dense_units': 32,
-        'batch_size': 32,
-        'epochs': 80,
-        'patience': 15,
-        'price_range': 'mid'
-    },
-    'low': {
-        'units': 32,
-        'dropout': 0.1,
-        'dense_units': 16,
-        'batch_size': 32,
-        'epochs': 60,
-        'patience': 10,
-        'price_range': 'low'
-    }
-}
-
-# --- Feature Engineering ---
-def calculate_rsi(data, periods=14):
-    """Calculate RSI technical indicator"""
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_macd(data, fast=12, slow=26, signal=9):
-    """Calculate MACD technical indicator"""
-    exp1 = data.ewm(span=fast, adjust=False).mean()
-    exp2 = data.ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    signal_line = macd.ewm(span=signal, adjust=False).mean()
-    histogram = macd - signal_line
-    return macd, signal_line, histogram
-
-def create_features(df):
-    """Create features for the dataset, ensuring no data leakage"""
-    df = df.copy()
-    
-    # Calculate VWAP
-    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
-    df['VWAP_MA5'] = df['VWAP'].rolling(window=5, min_periods=1).mean().shift(1)
-    df['VWAP_MA20'] = df['VWAP'].rolling(window=20, min_periods=1).mean().shift(1)
-    df['Price_vs_VWAP'] = (df['Close'] - df['VWAP']) / df['VWAP']  # Normalized price difference from VWAP
-    
-    # Basic price features (no leakage as they use only current or past data)
-    df['Prev_Close'] = df['Close'].shift(1)
-    df['Price_Change'] = df['Close'].pct_change()
-    df['Price_Change_5d'] = df['Close'].pct_change(periods=5)
-    df['Price_Change_20d'] = df['Close'].pct_change(periods=20)
-    df['High_Low_Range'] = (df['High'] - df['Low']) / df['Close']
-    df['Price_Range_5d'] = (df['High'].rolling(5).max() - df['Low'].rolling(5).min()) / df['Close']
-    
-    # Moving averages
-    for window in [5, 10, 20, 50]:
-        df[f'MA{window}'] = df['Close'].rolling(window=window, min_periods=1).mean().shift(1)
-        df[f'Volume_MA{window}'] = df['Volume'].rolling(window=window, min_periods=1).mean().shift(1)
-    
-    # Volatility and momentum (ensure proper shifting)
-    df['Volatility'] = df['Price_Change'].rolling(window=10, min_periods=1).std().shift(1)
-    df['Momentum'] = df['Close'] - df['Close'].shift(5)
-    df['Momentum_MA5'] = df['Momentum'].rolling(5, min_periods=1).mean().shift(1)
-    df['Momentum_MA20'] = df['Momentum'].rolling(20, min_periods=1).mean().shift(1)
-    
-    # Technical indicators (ensure proper shifting)
-    df['RSI'] = calculate_rsi(df['Close']).shift(1)
-    df['RSI_MA5'] = df['RSI'].rolling(5, min_periods=1).mean().shift(1)
-    macd, signal, hist = calculate_macd(df['Close'])
-    df['MACD'] = macd.shift(1)
-    df['MACD_Signal'] = signal.shift(1)
-    df['MACD_Hist'] = hist.shift(1)
-    
-    # Bollinger Bands (ensure proper shifting)
-    df['BB_Middle'] = df['Close'].rolling(window=20, min_periods=1).mean().shift(1)
-    df['BB_Std'] = df['Close'].rolling(window=20, min_periods=1).std().shift(1)
-    df['BB_Upper'] = df['BB_Middle'] + 2 * df['BB_Std']
-    df['BB_Lower'] = df['BB_Middle'] - 2 * df['BB_Std']
-    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
-    df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])
-    
-    # Price volatility over different periods
-    df['Price_Volatility_5d'] = df['Price_Change'].rolling(window=5, min_periods=1).std().shift(1)
-    df['Price_Volatility_20d'] = df['Price_Change'].rolling(window=20, min_periods=1).std().shift(1)
-    
-    # Drop rows with NaN values
-    df = df.dropna()
-    
-    return df
+# Enable mixed precision for better performance
+tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
 def check_directories():
     """Check if required directories exist and create them if needed"""
@@ -167,269 +32,61 @@ def check_directories():
             os.makedirs(directory)
             print(f"Created directory: {directory}")
 
-def get_price_range(coin_id):
-    """Determine the price range category for a coin"""
-    for range_name, coins in price_ranges.items():
-        if coin_id in coins:
-            return range_name
-    return 'low'
-
-def create_lstm_model(input_shape, config):
-    """Create LSTM model with price-range specific architecture"""
-    if config.get('price_range') == 'high':
-        # Enhanced architecture for high-range coins
-        inputs = Input(shape=input_shape)
-        
-        # First LSTM block with residual connection
-        x = LSTM(config['units'], return_sequences=True)(inputs)
-        x = LayerNormalization()(x)
-        x = Dropout(config['dropout'])(x)
-        
-        # Second LSTM block with residual connection
-        lstm_out = LSTM(config['units'], return_sequences=True)(x)
-        lstm_out = LayerNormalization()(lstm_out)
-        x = Add()([x, lstm_out])  # Residual connection
-        x = Dropout(config['dropout'])(x)
-        
-        # Third LSTM block
-        x = LSTM(config['units'] // 2, return_sequences=False)(x)
-        x = LayerNormalization()(x)
-        x = Dropout(config['dropout'])(x)
-        
-        # Dense layers
-        x = Dense(config['dense_units'], activation='relu')(x)
-        x = LayerNormalization()(x)
-        x = Dropout(config['dropout'] / 2)(x)
-        
-        outputs = Dense(1)(x)
-        
-        model = Model(inputs=inputs, outputs=outputs)
-        model.compile(optimizer='adam', loss='mse')
-        return model
-    else:
-        # Standard architecture for mid and low-range coins
-        model = Sequential([
-            Input(shape=input_shape),
-            LSTM(config['units'], return_sequences=True),
-            Dropout(config['dropout']),
-            LSTM(config['units'] // 2, return_sequences=False),
-            Dropout(config['dropout']),
-            Dense(config['dense_units'], activation='relu'),
-            Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mse')
-        return model
-
-def create_sequences(data, window=30):
+def create_sequences(data, seq_length):
     """Create sequences for LSTM input"""
     X, y = [], []
-    for i in range(len(data) - window):
-        X.append(data[i:i+window])
-        y.append(data[i+window, 0])  # Predict next day's close price
-    return np.array(X), np.array(y)
+    for i in range(len(data) - seq_length):
+        X.append(data[i:(i + seq_length)])
+        y.append(data[i + seq_length, 0])
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
 
-def normalize_data(data, price_range):
-    """Normalize data based on price range"""
-    data = data.copy()
+@tf.function(reduce_retracing=True)
+def train_step(model, optimizer, x, y):
+    """Single training step with tf.function"""
+    with tf.GradientTape() as tape:
+        predictions = model(x, training=True)
+        loss = tf.keras.losses.mean_squared_error(y, predictions)
     
-    if price_range == 'high':
-        # For price data (Close prices), ensure positive values
-        if data.shape[1] == 1:  # Target variable
-            data = np.abs(data)
-        else:  # Features
-            min_vals = data.min(axis=0)
-            if (min_vals < 0).any():
-                data = data - min_vals + 1e-6
-        
-        # Log transform + MinMax scaling
-        data = np.log1p(data)
-        scaler = MinMaxScaler()
-        return scaler.fit_transform(data), scaler
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    return loss
+
+def create_lstm_model(input_shape):
+    """Create and compile LSTM model"""
+    model = Sequential([
+        Input(shape=input_shape, dtype=tf.float32),
+        LSTM(100, return_sequences=True),
+        Dropout(0.2),
+        LSTM(50, return_sequences=False),
+        Dropout(0.2),
+        Dense(25),
+        Dense(1)
+    ])
     
-    # For mid and low range coins, use standard MinMax scaling
-    scaler = MinMaxScaler()
-    return scaler.fit_transform(data), scaler
+    optimizer = Adam(learning_rate=LEARNING_RATE)
+    model.compile(
+        optimizer=optimizer,
+        loss='mse',
+        jit_compile=True  # Enable XLA compilation
+    )
+    return model
 
-def process_coin(coin, coin_id, historical_df, recent_df):
-    """Process a single cryptocurrency"""
-    try:
-        print(f"\nProcessing {coin}...")
-        
-        # Debug: Print initial data shape
-        print(f"Initial historical data shape: {historical_df.shape}")
-        
-        # Combine and validate data
-        if recent_df is None:
-            df = historical_df
-        else:
-            df = pd.concat([historical_df, recent_df])
-            df = df.drop_duplicates(subset=['Date']).sort_values('Date').reset_index(drop=True)
-        
-        # Debug: Print combined data shape
-        print(f"Combined data shape: {df.shape}")
-        
-        # Validate data
-        if df.isnull().any().any():
-            print(f"Warning: Missing values in data for {coin}, attempting to handle...")
-            df = df.fillna(method='ffill').fillna(method='bfill')
-        
-        # Ensure we have enough data
-        if len(df) < MIN_TRAIN_SIZE + MIN_TEST_SIZE:
-            print(f"Insufficient data for {coin}, skipping...")
-            return None
-            
-        # Split data ensuring no overlap
-        split_date = df['Date'].max() - timedelta(days=TEST_PERIOD_DAYS)
-        train = df[df['Date'] < split_date].copy()
-        test = df[df['Date'] >= split_date].copy()
-        
-        # Debug: Print split data shapes
-        print(f"Train data shape: {train.shape}")
-        print(f"Test data shape: {test.shape}")
-        
-        # Verify split
-        if len(train) < MIN_TRAIN_SIZE or len(test) < MIN_TEST_SIZE:
-            print(f"Insufficient data after split for {coin}, skipping...")
-            return None
-            
-        # Verify no overlap in dates
-        if train['Date'].max() >= test['Date'].min():
-            print(f"Warning: Date overlap detected in {coin}, adjusting split...")
-            split_date = train['Date'].max() + timedelta(days=1)
-            train = df[df['Date'] < split_date].copy()
-            test = df[df['Date'] >= split_date].copy()
-        
-        # Create features
-        print(f"Creating features for {coin}...")
-        try:
-            train = create_features(train)
-            test = create_features(test)
-            
-            # Debug: Print feature creation results
-            print(f"Train features shape: {train.shape}")
-            print(f"Test features shape: {test.shape}")
-            
-            # Validate features
-            if train.isnull().any().any() or test.isnull().any().any():
-                print(f"Warning: NaN values in features, filling with appropriate values...")
-                train = train.fillna(method='ffill').fillna(method='bfill')
-                test = test.fillna(method='ffill').fillna(method='bfill')
-            
-        except ValueError as e:
-            print(f"Error in feature creation for {coin}: {str(e)}")
-            return None
-        
-        # Verify we have features
-        if len(train) == 0 or len(test) == 0:
-            print(f"No features created for {coin}, skipping...")
-            return None
-        
-        # Get price range and configuration
-        price_range = get_price_range(coin_id)
-        config = lstm_config[price_range]
-        
-        # Prepare features
-        feature_cols = [col for col in train.columns if col not in ['Date', 'Close']]
-        
-        # Scale features and target using price-range specific normalization
-        X_train_scaled, feature_scaler = normalize_data(train[feature_cols], price_range)
-        y_train_scaled, target_scaler = normalize_data(train[['Close']], price_range)
-        
-        # Scale test data using training scalers
-        X_test_scaled = feature_scaler.transform(test[feature_cols])
-        y_test = test['Close'].values
-        
-        # Create sequences
-        window = 30
-        X_train_seq, y_train_seq = create_sequences(X_train_scaled, window)
-        X_test_seq, y_test_seq = create_sequences(X_test_scaled, window)
-        
-        # Debug: Print sequence shapes
-        print(f"X_train_seq shape: {X_train_seq.shape}")
-        print(f"X_test_seq shape: {X_test_seq.shape}")
-        
-        # Verify sequences
-        if len(X_train_seq) == 0 or len(X_test_seq) == 0:
-            print(f"Error creating sequences for {coin}, skipping...")
-            return None
-        
-        # Create and train model
-        print(f"Training LSTM model for {coin} ({price_range} range)...")
-        model = create_lstm_model((window, len(feature_cols)), config)
-        
-        early_stopping = EarlyStopping(
-            monitor='val_loss',
-            patience=config['patience'],
-            restore_best_weights=True
-        )
-        
-        history = model.fit(
-            X_train_seq, y_train_seq,
-            epochs=config['epochs'],
-            batch_size=config['batch_size'],
-            validation_split=0.1,
-            callbacks=[early_stopping],
-            verbose=0
-        )
-        
-        # Make predictions
-        print(f"Making predictions for {coin}...")
-        y_pred_scaled = model.predict(X_test_seq)
-        y_pred = target_scaler.inverse_transform(y_pred_scaled)
-        
-        # Calculate metrics
-        mae = mean_absolute_error(y_test[window:], y_pred)
-        mse = mean_squared_error(y_test[window:], y_pred)
-        rmse = np.sqrt(mse)
-        mape = np.mean(np.abs((y_test[window:] - y_pred.flatten()) / y_test[window:])) * 100
-        
-        print(f"Metrics for {coin}:")
-        print(f"MAE: {mae:.2f}")
-        print(f"RMSE: {rmse:.2f}")
-        print(f"MAPE: {mape:.2f}%")
-        
-        return {
-            'coin_id': coin_id,
-            'MAE': mae,
-            'MSE': mse,
-            'RMSE': rmse,
-            'MAPE': mape,
-            'Price_Range': price_range,
-            'test_data': test,
-            'y_test': y_test[window:],
-            'preds': y_pred.flatten(),
-            'history': history.history
-        }
-        
-    except Exception as e:
-        print(f"Error processing {coin}: {str(e)}")
-        return None
-
-def create_plots(coin, test, y_test, preds, price_range, history, pdf):
+def create_plots(coin, test_dates, y_test, preds, pdf):
     """Create and save plots to PDF"""
     fig = plt.figure(figsize=(15, 10))
     
     # Price Predictions
     plt.subplot(2, 2, 1)
-    plt.plot(test['Date'].values[-len(y_test):], y_test, label='Actual', color='blue')
-    plt.plot(test['Date'].values[-len(preds):], preds, label='Predicted', color='red')
-    plt.title(f'{coin} Price Prediction (Last 6 Months) - {price_range} range')
+    plt.plot(test_dates, y_test, label='Actual', color='blue')
+    plt.plot(test_dates, preds, label='Predicted', color='red')
+    plt.title(f'{coin} Price Prediction')
     plt.xlabel('Date')
     plt.ylabel('Close Price')
     plt.legend()
     plt.xticks(rotation=45)
     
-    # Training History
-    plt.subplot(2, 2, 2)
-    plt.plot(history['loss'], label='Training Loss')
-    plt.plot(history['val_loss'], label='Validation Loss')
-    plt.title(f'{coin} Training History')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    
     # Prediction Error Distribution
-    plt.subplot(2, 2, 3)
+    plt.subplot(2, 2, 2)
     errors = y_test - preds
     plt.hist(errors, bins=50)
     plt.title(f'{coin} Prediction Error Distribution')
@@ -437,12 +94,20 @@ def create_plots(coin, test, y_test, preds, price_range, history, pdf):
     plt.ylabel('Frequency')
     
     # Actual vs Predicted Scatter
-    plt.subplot(2, 2, 4)
+    plt.subplot(2, 2, 3)
     plt.scatter(y_test, preds, alpha=0.5)
     plt.plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], 'r--')
     plt.title(f'{coin} Actual vs Predicted')
     plt.xlabel('Actual Price')
     plt.ylabel('Predicted Price')
+    
+    # Error Over Time
+    plt.subplot(2, 2, 4)
+    plt.plot(test_dates, errors)
+    plt.title(f'{coin} Prediction Error Over Time')
+    plt.xlabel('Date')
+    plt.ylabel('Error')
+    plt.xticks(rotation=45)
     
     plt.tight_layout()
     pdf.savefig(fig)
@@ -452,139 +117,196 @@ def create_summary_plots(results_df, pdf):
     """Create summary plots for all coins"""
     fig, axs = plt.subplots(2, 2, figsize=(15, 10))
     
-    # RMSE Comparison by Price Range
+    # RMSE Comparison
     ax = axs[0, 0]
-    for range_name, color in zip(['high', 'mid', 'low'], ['tab:blue', 'tab:orange', 'tab:green']):
-        range_results = results_df[results_df['Price_Range'] == range_name]
-        ax.bar(range_results.index, range_results['RMSE'], label=range_name.upper(), color=color)
-    ax.set_title('RMSE Comparison Across Cryptocurrencies by Price Range')
+    ax.bar(results_df.index, results_df['RMSE'])
+    ax.set_title('RMSE Comparison Across Cryptocurrencies')
     ax.set_xlabel('Cryptocurrency')
     ax.set_ylabel('RMSE')
     ax.set_xticks(range(len(results_df.index)))
     ax.set_xticklabels(results_df.index, rotation=45, ha='right', fontsize=8)
-    ax.legend()
     
-    # MAPE Comparison by Price Range
+    # MAPE Comparison
     ax = axs[0, 1]
-    for range_name, color in zip(['high', 'mid', 'low'], ['tab:blue', 'tab:orange', 'tab:green']):
-        range_results = results_df[results_df['Price_Range'] == range_name]
-        ax.bar(range_results.index, range_results['MAPE'], label=range_name.upper(), color=color)
-    ax.set_title('MAPE Comparison Across Cryptocurrencies by Price Range')
+    ax.bar(results_df.index, results_df['MAPE'])
+    ax.set_title('MAPE Comparison Across Cryptocurrencies')
     ax.set_xlabel('Cryptocurrency')
     ax.set_ylabel('MAPE (%)')
     ax.set_xticks(range(len(results_df.index)))
     ax.set_xticklabels(results_df.index, rotation=45, ha='right', fontsize=8)
-    ax.legend()
     
-    # Box Plot of RMSE and MAPE by Price Range
+    # Box Plot of RMSE and MAPE
     ax = axs[1, 0]
-    sns.boxplot(x='Price_Range', y='RMSE', data=results_df, ax=ax, palette='Set2')
-    ax.set_title('RMSE Distribution by Price Range')
-    ax.set_xlabel('Price Range')
-    ax.set_ylabel('RMSE')
-    ax2 = ax.twinx()
-    sns.boxplot(x='Price_Range', y='MAPE', data=results_df, ax=ax2, palette='Set1', boxprops=dict(alpha=0.3))
-    ax2.set_ylabel('MAPE (%)')
-    ax2.set_yticks(ax2.get_yticks())
-    ax2.set_yticklabels([f'{y:.1f}' for y in ax2.get_yticks()])
-    ax2.grid(False)
+    sns.boxplot(data=results_df[['RMSE', 'MAPE']], ax=ax)
+    ax.set_title('RMSE and MAPE Distribution')
+    ax.set_ylabel('Value')
     
     # Scatter plot of RMSE vs. MAPE
     ax = axs[1, 1]
-    colors = {'high': 'tab:blue', 'mid': 'tab:orange', 'low': 'tab:green'}
-    for range_name in ['high', 'mid', 'low']:
-        subset = results_df[results_df['Price_Range'] == range_name]
-        ax.scatter(subset['RMSE'], subset['MAPE'], label=range_name.upper(), 
-                  color=colors[range_name], s=60, alpha=0.7, edgecolor='k')
-    ax.set_title('RMSE vs. MAPE by Price Range')
+    ax.scatter(results_df['RMSE'], results_df['MAPE'], s=60, alpha=0.7, edgecolor='k')
+    ax.set_title('RMSE vs. MAPE')
     ax.set_xlabel('RMSE')
     ax.set_ylabel('MAPE (%)')
-    ax.legend()
     
     plt.tight_layout()
     pdf.savefig(fig)
     plt.close()
+
+def process_coin(coin, historical_df):
+    """Process a single coin's data"""
+    try:
+        print(f"\nProcessing {coin}...")
+        # Prepare data
+        df = historical_df.copy()
+        df = df[['Date', 'Close']]
+        
+        print(f"Data shape: {df.shape}")
+        
+        # Ensure minimum data length
+        if len(df) < SEQUENCE_LENGTH * 3:  # Need enough data for train/val/test
+            print(f"Insufficient data for {coin}, skipping...")
+            return None
+        
+        # Split data into train (70%), validation (10%), and test (20%)
+        train_size = int(len(df) * 0.7)
+        val_size = int(len(df) * 0.1)
+        
+        train_df = df[:train_size]
+        val_df = df[train_size:train_size + val_size]
+        test_df = df[train_size + val_size:]
+        
+        print(f"Train size: {len(train_df)}, Val size: {len(val_df)}, Test size: {len(test_df)}")
+        
+        # Scale the data
+        scaler = MinMaxScaler()
+        train_scaled = scaler.fit_transform(train_df[['Close']])
+        val_scaled = scaler.transform(val_df[['Close']])
+        test_scaled = scaler.transform(test_df[['Close']])
+        
+        # Create sequences
+        print("Creating sequences...")
+        X_train, y_train = create_sequences(train_scaled, SEQUENCE_LENGTH)
+        X_val, y_val = create_sequences(val_scaled, SEQUENCE_LENGTH)
+        X_test, y_test = create_sequences(test_scaled, SEQUENCE_LENGTH)
+        
+        # Ensure sequences have correct shape
+        if len(X_train) == 0 or len(X_val) == 0 or len(X_test) == 0:
+            print(f"Insufficient sequences for {coin}, skipping...")
+            return None
+            
+        print(f"Training sequences shape: {X_train.shape}")
+        
+        # Create and train model
+        print("Creating model...")
+        model = create_lstm_model((SEQUENCE_LENGTH, 1))
+        
+        # Callbacks
+        early_stopping = EarlyStopping(
+            monitor='val_loss',
+            patience=10,
+            restore_best_weights=True
+        )
+        
+        model_checkpoint = ModelCheckpoint(
+            os.path.join(RESULTS_DIR, f'{coin}_best_model.keras'),
+            monitor='val_loss',
+            save_best_only=True
+        )
+        
+        # Train model
+        print("Training model...")
+        history = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=EPOCHS,
+            batch_size=BATCH_SIZE,
+            callbacks=[early_stopping, model_checkpoint],
+            verbose=1
+        )
+        
+        print("Making predictions...")
+        # Make predictions
+        test_predictions = model.predict(X_test, verbose=0)
+        
+        # Inverse transform predictions and actual values
+        test_predictions = scaler.inverse_transform(test_predictions)
+        y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+        
+        # Calculate metrics
+        mae = mean_absolute_error(y_test_actual, test_predictions)
+        mse = mean_squared_error(y_test_actual, test_predictions)
+        rmse = np.sqrt(mse)
+        mape = np.mean(np.abs((y_test_actual - test_predictions) / y_test_actual)) * 100
+        
+        print(f"Metrics for {coin}:")
+        print(f"MAE: {mae:.2f}")
+        print(f"RMSE: {rmse:.2f}")
+        print(f"MAPE: {mape:.2f}%")
+        
+        return {
+            'MAE': mae,
+            'MSE': mse,
+            'RMSE': rmse,
+            'MAPE': mape,
+            'test_dates': test_df['Date'].values[SEQUENCE_LENGTH:],
+            'y_test': y_test_actual.flatten(),
+            'preds': test_predictions.flatten(),
+            'history': history.history
+        }
+        
+    except Exception as e:
+        print(f"Error processing {coin}: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     # Initialize
     check_directories()
     results = {}
     
+    # Get list of historical data files
+    historical_files = [f for f in os.listdir(HISTORICAL_DATA_DIR) if f.startswith('coin_')]
+    print(f"Found {len(historical_files)} historical files")
+    
     # Process each coin
     with PdfPages(os.path.join(RESULTS_DIR, 'prediction_report.pdf')) as pdf:
-        pbar = tqdm(coin_mapping.items(), total=len(coin_mapping), desc="Processing coins")
+        pbar = tqdm(historical_files, desc="Processing coins")
         
-        for coin, coin_id in pbar:
+        for file in pbar:
             try:
+                coin = file.replace('coin_', '').replace('.csv', '')
+                print(f"\nProcessing file: {file}")
+                
                 # Load historical data
-                historical_file = os.path.join(HISTORICAL_DATA_DIR, f'coin_{coin}.csv')
-                if not os.path.exists(historical_file):
-                    print(f"Historical file not found for {coin}, skipping...")
-                    continue
-                
-                historical_df = pd.read_csv(historical_file, parse_dates=['Date'])
-                historical_df = historical_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-                
-                # Debug: Print initial data loading
-                print(f"\nLoading data for {coin}...")
-                print(f"Historical data shape: {historical_df.shape}")
-                print(f"Date range: {historical_df['Date'].min()} to {historical_df['Date'].max()}")
+                historical_df = pd.read_csv(
+                    os.path.join(HISTORICAL_DATA_DIR, file),
+                    parse_dates=['Date']
+                )
                 
                 if historical_df.isnull().any().any():
                     print(f"Missing values in historical data for {coin}, skipping...")
                     continue
                 
-                # Fetch recent data
-                cg = CoinGeckoAPI()
-                recent_data = cg.get_coin_market_chart_by_id(
-                    id=coin_id,
-                    vs_currency='usd',
-                    days=30
-                )
-                
-                if recent_data and 'prices' in recent_data:
-                    recent_df = pd.DataFrame(recent_data['prices'], columns=['Date', 'Close'])
-                    recent_df['Date'] = pd.to_datetime(recent_df['Date'], unit='ms')
-                    
-                    # Adjust dates to align with historical data
-                    last_historical_date = historical_df['Date'].max()
-                    date_diff = recent_df['Date'].min() - last_historical_date
-                    
-                    if date_diff.days > 1:  # If there's a gap
-                        print(f"Warning: Gap of {date_diff.days} days between historical and recent data")
-                        # Adjust recent dates to start from the day after historical data
-                        recent_df['Date'] = recent_df['Date'] - date_diff + timedelta(days=1)
-                    
-                    recent_df['Open'] = recent_df['Close']
-                    recent_df['High'] = recent_df['Close']
-                    recent_df['Low'] = recent_df['Close']
-                    recent_df['Volume'] = 0  # Volume not available in recent data
-                    
-                    # Debug: Print recent data
-                    print(f"Recent data shape: {recent_df.shape}")
-                    print(f"Recent data date range: {recent_df['Date'].min()} to {recent_df['Date'].max()}")
-                else:
-                    recent_df = None
-                    print("No recent data available")
-                
                 # Process coin
-                result = process_coin(coin, coin_id, historical_df, recent_df)
+                result = process_coin(coin, historical_df)
                 if result is None:
                     continue
                 
                 # Store results
-                results[coin_id] = {
+                results[coin] = {
                     'MAE': result['MAE'],
                     'MSE': result['MSE'],
                     'RMSE': result['RMSE'],
-                    'MAPE': result['MAPE'],
-                    'Price_Range': result['Price_Range']
+                    'MAPE': result['MAPE']
                 }
                 
                 # Create plots
-                create_plots(coin_id, result['test_data'], result['y_test'], 
-                           result['preds'], result['Price_Range'], 
-                           result['history'], pdf)
+                create_plots(
+                    coin,
+                    result['test_dates'],
+                    result['y_test'],
+                    result['preds'],
+                    pdf
+                )
                 
                 # Update progress bar
                 pbar.set_postfix({
@@ -604,8 +326,5 @@ if __name__ == "__main__":
     results_df.to_csv(os.path.join(RESULTS_DIR, 'prediction_metrics.csv'))
     
     # Print summary
-    print("\nPrediction Metrics Summary by Price Range:")
-    for range_name in ['high', 'mid', 'low']:
-        range_results = results_df[results_df['Price_Range'] == range_name]
-        print(f"\n{range_name.upper()} Price Range:")
-        print(range_results[['MAE', 'MSE', 'RMSE', 'MAPE']].describe())
+    print("\nPrediction Metrics Summary:")
+    print(results_df[['MAE', 'MSE', 'RMSE', 'MAPE']].describe())
