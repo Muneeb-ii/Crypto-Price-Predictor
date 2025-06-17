@@ -17,34 +17,49 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
   - Random Forest Regressor
   - Gradient Boosting Regressor
   - XGBoost Regressor
+- **Feature Selection**:
+  - Recursive Feature Elimination (RFE) with Random Forest
+  - LASSO with cross-validation
+  - Automatic selection of most important features for each coin
 
-#### Features
-- **Price Range-Specific Features**:
+#### Features and Parameters
+- **Price Range-Specific Configuration**:
   - High-value coins (Bitcoin, Ethereum, WrappedBitcoin):
-    - Advanced technical indicators
-    - Extended moving averages (MA5-MA50)
+    - Advanced technical indicators (MA5-MA50, MACD, RSI, Bollinger Bands)
     - Complex volatility measures
+    - Deeper trees (max_depth=15) and more estimators (n_estimators=200)
   - Mid-value coins (BinanceCoin, Solana, Cardano, etc.):
     - Standard technical indicators
     - Basic moving averages
-    - Volume analysis
+    - Balanced complexity (max_depth=10, n_estimators=150)
   - Low-value coins:
     - Essential price metrics
     - Basic moving averages
-    - Simplified indicators
+    - Simpler models (max_depth=8, n_estimators=100)
+
+#### Training Process
+- **Data Split**: Last 6 months used for testing
+- **Memory Management**:
+  - Automatic memory cleanup between coins
+  - Memory threshold monitoring (1000MB)
+  - Garbage collection after each coin
+- **API Handling**:
+  - 2-second delay between CoinGecko API calls
+  - Rate limit: 30 calls per minute
+  - Automatic retry on failure
 
 #### Performance Metrics (ML Model)
 - **Best Performing Coins**:
-  - USDCoin: 0.05% MAPE
-  - Tether: 0.15% MAPE
-  - Bitcoin: 4.70% MAPE
-  - Monero: 4.35% MAPE
+  - USDCoin: 0.005% MAPE
+  - Tether: 0.009% MAPE
+  - Aave: 1.25% MAPE
+  - Ethereum: 1.02% MAPE
 
 - **Challenging Predictions**:
-  - ChainLink: 50.26% MAPE
-  - BinanceCoin: 20.88% MAPE
-  - Cardano: 17.09% MAPE
-  - Dogecoin: 18.10% MAPE
+  - Bitcoin: 1.83% MAPE
+  - WrappedBitcoin: 2.31% MAPE
+  - Tron: 3.97% MAPE
+  - Cardano: 2.56% MAPE
 
 ### 2. Deep Learning Model (LSTM)
 
@@ -58,6 +73,14 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
   - Dense Layer: 25 units
   - Output Layer: 1 unit
 
+#### Training Process
+- **Data Split**: 70% training, 10% validation, 20% testing
+- **Sequence Creation**: 60-day lookback period
+- **Optimization**:
+  - Mixed precision training (float16)
+  - XLA compilation enabled
+  - Early stopping with patience=10
+
 #### Training Parameters
 - Batch Size: 32
 - Epochs: 100 (with early stopping)
@@ -66,11 +89,17 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
 - Loss Function: Mean Squared Error
 
 #### Performance Metrics (LSTM Model)
-- **Overall Statistics**:
-  - Mean MAPE: 10.60%
-  - Median MAPE: 6.53%
-  - Best MAPE: 0.05% (USDCoin)
-  - Worst MAPE: 50.26% (ChainLink)
+- **Best Performing Coins**:
+  - USDCoin: 0.05% MAPE
+  - Tether: 0.15% MAPE
+  - Bitcoin: 4.70% MAPE
+  - Monero: 4.35% MAPE
+
+- **Challenging Predictions**:
+  - ChainLink: 50.26% MAPE
+  - BinanceCoin: 20.88% MAPE
+  - Cardano: 17.09% MAPE
+  - Dogecoin: 18.10% MAPE
 
 ## Model Strengths and Weaknesses
 
@@ -166,10 +195,16 @@ python predictor_dl.py
 
 ## Output
 
-Both models generate:
-- `prediction_metrics.csv`: Performance metrics for each cryptocurrency
-- `prediction_report.pdf`: Detailed visualizations and analysis
-- Model checkpoints in their respective results directories
+Both models generate results in their respective directories:
+- ML Model: `results/randomforest_prediction_report/`
+  - `prediction_metrics.csv`: Performance metrics and selected features
+  - `prediction_report.pdf`: Visualizations and analysis
+  - Model checkpoints for each coin
+
+- LSTM Model: `results/lstm_prediction_report/`
+  - `prediction_metrics.csv`: Performance metrics
+  - `prediction_report.pdf`: Visualizations and analysis
+  - `{coin}_best_model.keras`: Best model for each coin
 
 ## Future Improvements
 
@@ -177,29 +212,46 @@ Both models generate:
    - Implement attention mechanisms in LSTM
    - Add transformer-based models
    - Improve ensemble methods
+   - Fine-tune model parameters for each price range
+   - Implement time-series cross-validation
 
 2. **Feature Engineering**:
    - Add sentiment analysis
    - Include on-chain metrics
    - Integrate macroeconomic indicators
+   - Add support for more cryptocurrencies
+   - Implement new technical indicators
 
 3. **Technical Improvements**:
    - Implement cross-validation
    - Add prediction intervals
    - Improve error handling
    - Optimize memory usage
+   - Improve handling of outlier coins with high error
 
 4. **User Experience**:
    - Add real-time prediction API
    - Create interactive visualizations
    - Implement automated model selection
+   - Add support for custom model parameters
+   - Create a web interface for predictions
 
 ## Notes
 
-- CoinGecko API has a rate limit of 30 calls per minute
-- Scripts include appropriate delays to respect API limits
-- Both models use early stopping to prevent overfitting
-- Results are saved in separate directories for each model
+- **API Limitations**:
+  - CoinGecko API rate limit: 30 calls per minute
+  - 2-second delay between API calls
+  - Automatic handling of rate limits and retries
+
+- **Model Training**:
+  - Both models use early stopping to prevent overfitting
+  - ML model: Feature selection before training
+  - LSTM model: Mixed precision training for better performance
+
+- **Results Storage**:
+  - ML Model: `results/randomforest_prediction_report/`
+  - LSTM Model: `results/lstm_prediction_report/`
+  - Each model maintains separate metrics and visualizations
 
 ## Model Details
 
