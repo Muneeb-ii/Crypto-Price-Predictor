@@ -167,7 +167,7 @@ A comprehensive cryptocurrency price prediction system that implements both Mach
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/Muneeb-ii/Crypto-Price-Predictor
 cd Crypto-Price-Predictor
 ```
 
@@ -215,7 +215,10 @@ Both models generate results in their respective directories:
   - ML model: Feature selection before training
   - LSTM model: Mixed precision training for better performance
 
-- **Results Storage**:
-  - ML Model: `results/randomforest_prediction_report/`
-  - LSTM Model: `results/lstm_prediction_report/`
-  - Each model maintains separate metrics and visualizations
+## Acknowledgements
+
+- **Data Sources**:
+  - CoinGecko API for cryptocurrency price data
+  - [Kaggle Dataset](https://www.kaggle.com/datasets/sudalairajkumar/cryptocurrencypricehistory?select=coin_NEM.csv)
+
+
