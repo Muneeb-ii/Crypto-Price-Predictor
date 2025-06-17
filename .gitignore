@@ -207,3 +207,11 @@ cython_debug/
 *.webp
 *.svg
 *.eps
+
+# Deep learning models
+*.keras
+*.h5
+*.hdf5
+*.keras.h5
+*.keras.hdf5
+*.keras.h5
